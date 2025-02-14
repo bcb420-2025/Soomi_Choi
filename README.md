@@ -1,2 +1,4 @@
 # Soomi_Choi
-repo for bcb420 for Soomi Choi
+
+## Assignment 1: Processed Notebook
+The final rendered HTML notebook can be viewed [here](A1_SoomiChoi.html).
