@@ -98,12 +98,12 @@ metadata$description <- trimws(toupper(metadata$description))
 colnames(expr_data) <- trimws(toupper(colnames(expr_data)))
 
 # 2. Identify human samples
-human_samples <- metadata$geo_accession[metadata$taxid_ch1 == "9606"]
-if (length(human_samples) == 0) stop("No human samples found")
+#human_samples <- metadata$geo_accession[metadata$taxid_ch1 == "9606"]
+#if (length(human_samples) == 0) stop("No human samples found")
 
 # 3. Map GEO Accession to Sample Name
-human_sample_names <- na.omit(setNames(metadata$description, metadata$geo_accession)[human_samples])
-if (length(human_sample_names) == 0) stop("o valid human sample names mapped")
+#human_sample_names <- na.omit(setNames(metadata$description, metadata$geo_accession)[human_samples])
+#if (length(human_sample_names) == 0) stop("o valid human sample names mapped")
 
 # 4. Match sample names to expr_data
 valid_samples <- intersect(human_sample_names, colnames(expr_data))
@@ -160,7 +160,7 @@ boxplot(expr_data,
         outline = FALSE)
 
 # 5. Identify and remove all-zero samples
-expr_data <- expr_data[, colSums(expr_data) > 0, drop = FALSE]
+# expr_data <- expr_data[, colSums(expr_data) > 0, drop = FALSE]
 ```
 
 ## **3-5. Clean the Data (Remove Outliers)**
@@ -181,12 +181,12 @@ outlier_threshold <- 3 * median(mad_scores, na.rm = TRUE)
 outlier_samples <- which(mad_scores > outlier_threshold)
 
 # 5. Ensure `expr_data` does not become empty after removing outliers
-if (length(outlier_samples) > 0 && length(outlier_samples) < ncol(expr_data) - 1) {
-    expr_data <- expr_data[, -outlier_samples, drop = FALSE]
-    print(paste0("Removed ", length(outlier_samples), " outlier samples."))
-} else {
-    print(" Too many outliers detected")
-}
+#if (length(outlier_samples) > 0 && length(outlier_samples) < #ncol(expr_data) - 1) {
+    #expr_data <- expr_data[, -outlier_samples, drop = FALSE]
+    #print(paste0("Removed ", length(outlier_samples), " outlier samples."))
+#} else {
+    #print(" Too many outliers detected")
+#}
 
 # 6. Ensure metadata remains aligned
 metadata <- metadata[metadata$geo_accession %in% colnames(expr_data), , drop = FALSE]

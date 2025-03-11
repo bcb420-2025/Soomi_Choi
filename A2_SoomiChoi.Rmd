@@ -1,1 +1,377 @@
+---
+title: "Assignment 2 - Differential Gene expression and Preliminary ORA"
+date: "2025-03-08"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_captions: true
+    theme: readable
+---
+
+# **Title**: Assignment 2 - Differential Gene expression and Preliminary ORA
+# **Name**: Soomi Choi
+
+# **1. Introduction**
+
+This report introduces the differential expression analysis and over-representation analysis of the GSE263125 dataset.
+
+The dataset investigates the impact of gut inflammation on enteric neurodegeneration, and in this analysis, we focus on the differential expression of genes between conditions.
+
+## **1.1 Summary of Assignment 1**
+In A1, I have completed the following:
+- Downloaded the **GSE263125 dataset** from GEO.
+- Processed the raw count data by **filtering human samples**.
+- Applied **log2 normalization**.
+- Mapped probe IDs to **HUGO gene symbols**.
+
+The processed dataset is stored in:
+`data/processed/GSE263125_processed.csv`
+
+---
+
+# **2. Methods**
+
+## **2.1 Load the Libraries**
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+# Load necessary libraries for running
+options(repos = c(CRAN = "https://cran.rstudio.com/"))
+
+if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+BiocManager::install(c("limma", "edgeR", "org.Hs.eg.db", "clusterProfiler", "GEOquery"))
+install.packages(c("tidyverse", "pheatmap", "ggplot2", "EnhancedVolcano", "dplyr"))
+
+library(limma)
+library(edgeR)
+library(org.Hs.eg.db)
+library(clusterProfiler)
+library(GEOquery)
+library(tidyverse)
+library(pheatmap)
+library(ggplot2)
+library(EnhancedVolcano)
+library(dplyr)
+library(enrichplot)
+```
+
+## **2.2 Load Processed Expression Data**
+
+- **expr_data**: a dataset generated from A1 which contains log2-transformed expression values
+  - Rows: Genes, which are mapped to HUGO symbols
+  - Columns: Human samples
+
+```{r load_data}
+# Load normalized expression data
+expr_data <- read.csv("data/processed/GSE263125_processed.csv", row.names = 1)
+
+# Make sure column names are standardized
+colnames(expr_data) <- trimws(toupper(colnames(expr_data)))
+
+# Remove columns with zero val
+expr_data <- expr_data[, colSums(expr_data) > 0]
+
+# Show processed expr_dadta
+knitr::kable(head(expr_data), caption = "Processed expr_data")
+```
+  
+# **3. Experimental Design & Model Definition**
+
+## **3.1 Load Sample Metadata**
+
+- The dataset contains samples under diff conditions
+- This step is for ensuring that metadata & expression data match (before conducting differential expression analysis)
+
+```{r load_metadata}
+# Map HUMAN.PATIENT.SAMPLE.X to GSM IDs
+sample_mapping <- c(
+  "HUMAN.PATIENT.SAMPLE.1" = "GSM8186177",
+  "HUMAN.PATIENT.SAMPLE.2" = "GSM8186178",
+  "HUMAN.PATIENT.SAMPLE.3" = "GSM8186179",
+  "HUMAN.PATIENT.SAMPLE.4" = "GSM8186180",
+  "HUMAN.PATIENT.SAMPLE.5" = "GSM8186181",
+  "HUMAN.PATIENT.SAMPLE.6" = "GSM8186182",
+  "HUMAN.PATIENT.SAMPLE.7" = "GSM8186183",
+  "HUMAN.PATIENT.SAMPLE.8" = "GSM8186184"
+)
+
+# Rename cols in expr_data to GSM IDs
+colnames(expr_data) <- sample_mapping[colnames(expr_data)]
+
+# Define metadata to align with processed dataset
+metadata <- data.frame(
+  SampleID = c("GSM8186177", "GSM8186178", "GSM8186179", "GSM8186180", 
+               "GSM8186181", "GSM8186182", "GSM8186183", "GSM8186184"),
+  Condition = c("Early", "Late", "Early", "Late", "Early", "Late", "Early", "Late")
+)
+
+# Make sure SampleID formatting matches expr_data
+metadata$SampleID <- trimws(toupper(metadata$SampleID))
+colnames(expr_data) <- trimws(toupper(colnames(expr_data)))
+
+# Only keep valid samples in metadata
+valid_samples <- intersect(metadata$SampleID, colnames(expr_data))
+metadata <- metadata[metadata$SampleID %in% valid_samples, ]
+expr_data <- expr_data[, valid_samples]
+
+# Show metadata
+knitr::kable(metadata, caption = "Metadata")
+```
+
+## **3.2 Define the Model**
+
+- Define the model that will be used for differential expression analysis in the next step
+
+```{r model_design}
+# Convert condition to a factor
+metadata$Condition <- as.factor(metadata$Condition)
+
+# Create a design matrix
+design <- model.matrix(~ Condition, data = metadata)
+
+# View design matrix
+print(design)
+```
+
+# **4. Differential Gene Expression Analysis**
+
+Now that I have normalized expression data & metadata, I will conduct differential expression analysis to identify significantly differentially expressed genes bewteen the "Early" and "Late" conditions.
+
+## **4.1 Prepare the Data for Differential Expression Analysis**
+
+- Ensuring that I'm using raw counts as input, I will perform TMM normalization and voom transformation
+
+```{r prepare_DE}
+# Prepare data for differential expression analysis (expr_data: raw counts) & TMM normalization
+dge <- DGEList(counts = expr_data)
+dge <- calcNormFactors(dge)
+
+# Apply voom transformation (log2-transform + mean-variance stabilization)
+v <- voom(dge, design, plot = TRUE)
+
+# Fit linear model with limma and apply empirical Bayes moderation
+fit <- lmFit(v, design)
+fit <- eBayes(fit, trend = TRUE)
+```
+
+## **4.2 Calculate Differential Expression**
+
+- In this step, I will perform statistical testing using limma, then extract and summarize results for "Late" vs "Early" comparison
+
+```{r compute_DE}
+# Extract DE results for the condition "Late" vs "Early"
+DE_results <- topTable(fit, coef = 2, adjust.method = "BH", number = Inf)
+
+# Display top differentially expressed genes
+knitr::kable(head(DE_results), caption = "Differentially Expressed Genes")
+```
+
+- From the DE_results I've obtained just above, I can understand that all adjusted p-values are quite high, and this shows that no statistically significant differences were observed between "Late" and "Early" conditions
+- Low magnitude log-fold changes suggest minimal biological variation between the conditions
+- Low B-statistics indicate low confidence in differential expression findings
+
+## **4.3 Multiple Hypothesis Correction**
+
+- The method I used for this step is 'Benjamini-Hochberg (BH) correction' because it controls false discovery rate and works better with genomic studies with numerous tests
+
+```{r pvalue_correction}
+significant_genes <- sum(DE_results$adj.P.Val < 0.05, na.rm = TRUE)
+cat("Significant genes at FDR < 0.05:", significant_genes, "\n")
+```
+
+- The significant genes at FDR turn out to be 0
+
+## **4.4 Visualization of Differentially Expressed Genes**
+
+- **MA Plot**: visualizes the relationship between mean expression & log-fold change
+
+```{r MA_plot}
+# MA plot to visualize expression vs log-fold change
+plotMD(fit, column = 2, status = DE_results$adj.P.Val < 0.05,
+       main = "MA Plot: Late vs Early Conditions",
+       col = c("black", "red"),
+       legend = "topright")
+```
+
+- The MA plot shows very few points which indicates that only a small subset of genes were considered to be significant in expression
+- Also, the log-fold changes observed from the plot are mostly close to zero, suggesting very minimal differences between "Late" and "Early" conditions
+- Lastly, no points are seen to exceed standard thresholds for significance
+
+- **Volcano Plot**: identifies significant differentially expressed genes based on their log-fold change & adjusted p-value
+
+```{r volcano_plot}
+EnhancedVolcano(DE_results,
+    lab = rownames(DE_results),
+    x = "logFC",
+    y = "adj.P.Val",
+    title = "Volcano Plot: Late vs Early",
+    subtitle = "Red line indicates FDR threshold of 0.05",
+    pCutoff = 0.05,
+    FCcutoff = 1.0,  # Adjust fold-change threshold if needed
+    col = c("grey30", "forestgreen", "royalblue", "red2"))
+```
+
+- This volcano plot suggests that no significant differential expression was observed
+
+- **Heatmap**: visualizes how the most differentially expressed genes cluster beween conditions (Not Performed)
+
+- Reason: No significantly differentially expressed genes were identified (FDR < 0.05). Thus, a heatmap visualization would not provide meaningful biological insights.
+
+# **5. Thresholded over-representation analysis (ORA)**
+
+## **5.1 Selection of Method**
+
+- The method chosen for ORA is 'clusterProfiler' R package, because despite no statistically significant DE genes at conventional FDR thresholds, ORA can still be explored using relaxed thresholds
+
+## **5.2 Gene Selection for ORA**
+
+Due to no significant DE genes at standard thresholds (FDR < 0.05), I will be relaxing the criteria to perform exploratory ORA:
+
+- Top 50 genes ranked by adjusted p-value:
+  - Up-regulated genes: logFC > 0
+  - Down-regulated genes: logFC < 0
+  
+```{r gene_selection}
+# Define relaxed threshold (top 50 genes)
+top50_genes <- DE_results[order(DE_results$adj.P.Val), ][1:50, ]
+
+# Separate up & down regulated genes
+up_genes <- rownames(top50_genes[top50_genes$logFC > 0, ])
+down_genes <- rownames(top50_genes[top50_genes$logFC < 0, ])
+
+# Check counts
+cat("The number of up-regulated genes:", length(up_genes), "\n")
+cat("The number of down-regulated genes:", length(down_genes), "\n")
+```
+
+## **5.3 Annotation Data**
+
+I chose Gene Ontology, specifically Biological Process category, since it provides relatively clear biological interpretations about biological pathways & processes.
+
+The annotation database used for mapping gene symbols to ENTREZ IDs was 'org.Hs.eg.db (v3.14.0)'. I selected this version because it better aligns with the latest human genome annotations.
+
+## **5.4 Run ORA**
+
+```{r run_ORA}
+# Map gene symbols to ENTREZ IDs (required for ORA)
+gene_symbols <- rownames(DE_results)
+gene_ids <- mapIds(org.Hs.eg.db, keys=gene_symbols, column="ENTREZID", keytype="SYMBOL", multiVals="first")
+
+# Convert gene lists
+up_ids <- gene_ids[up_genes]
+down_ids <- gene_ids[down_genes]
+
+# Get rid of NAs
+up_ids <- na.omit(up_ids)
+down_ids <- na.omit(down_ids)
+
+# Run ORA separately for up & down regulated genes
+ora_up <- enrichGO(gene = up_ids, OrgDb = org.Hs.eg.db,
+                   ont = "BP", pAdjustMethod = "BH",
+                   pvalueCutoff = 0.05, qvalueCutoff = 0.2)
+
+ora_down <- enrichGO(gene = down_ids, OrgDb = org.Hs.eg.db,
+                     ont = "BP", pAdjustMethod = "BH",
+                     pvalueCutoff = 0.05, qvalueCutoff = 0.2)
+
+# Also, run ORA for combined top 50 gene list for comparison
+all_ids <- na.omit(gene_ids[rownames(top50_genes)])
+ora_combined <- enrichGO(gene = all_ids, OrgDb = org.Hs.eg.db,
+                         ont = "BP", pAdjustMethod = "BH",
+                         pvalueCutoff = 0.05, qvalueCutoff = 0.2)
+```
+
+## **5.5 Summary of the Results**
+
+```{r summary_ORA}
+# Show the number of significant gene sets returned
+cat("The number of significant gene sets (Up-regulated):", nrow(ora_up@result), "\n")
+cat("The number of significant gene sets (Down-regulated):", nrow(ora_down@result), "\n")
+cat("The number of significant gene sets (Combined):", nrow(ora_combined@result), "\n")
+
+# Display top 10 enriched gene sets for up-regulated genes
+knitr::kable(head(ora_up@result[,1:6], 10), caption = "Top 10 GO-BP Enrichment (Up-regulated genes)")
+
+# Display top 10 enriched gene sets for Down-regulated genes
+knitr::kable(head(ora_down@result[,1:6], 10), caption = "Top 10 GO-BP Enrichment (Down-regulated genes)")
+
+# Display top 10 enriched gene sets for combined genes
+knitr::kable(head(ora_combined@result[,1:6], 10), caption = "Top 10 GO-BP Enrichment (Combined genes)")
+```
+
+## **5.6 Overall Analysis of the Results**
+
+**Interpretation** (Up-regulated & Down-regulated):
+- Response to Oxygen Levels (GO:0070482):
+  - this shows potential involvement in hypoxia signaling / oxidative stress response (9/19 genes fall under this category, which presents strong association)
+- Strong in miRNA (GO:1902893 & GO:0061614):
+  - highly enriched pathways involve miRNA transcription & metabolism, suggesting that DEGs may play a role in post-transcriptional regulation via miRNAs
+- Apoptosis & Cell Proliferation:
+  - high in apoptotic signaling regulation (GO:2001233) suggests roles in cell survival
+  - muscle cell proliferation (GO:0033002) suggested at tissue regeneration or stress response
+
+**Comparison** (Up-regulated vs Down-regulated):
+- Separate Analysis:
+  - if miRNA-related terms are mainly in up-regulated genes, we can assume that these pathways are likely activated
+  - if apoptosis-related pathways are amplified in down-regulated genes, we can assume that apoptosis may be suppressed
+- Combined Analysis:
+  - the analysis captures both regulatory & responsive pathways, which provides a variety in perspectives (although it lacks high clarity in classifying up & down regulated gene functions)
+
+## **5.7 Visualization of the Results**
+
+```{r visualization}
+# Create /figures directory if it doesn't exist
+if (!dir.exists("figures")) {
+  dir.create("figures")
+}
+
+# Dotplot visualization (Up-regulated genes)
+p1 <- dotplot(ora_up, showCategory = 10) + 
+  ggtitle("ORA: Top GO-BP terms (Up-regulated genes)")
+ggsave("figures/ORA_dotplot_UP.png", p1, width=8, height=6, dpi=300)
+
+# Dotplot visualization (Down-regulated genes)
+p2 <- dotplot(ora_down, showCategory = 10) + 
+  ggtitle("ORA: Top GO-BP terms (Down-regulated genes)")
+ggsave("figures/ORA_dotplot_DOWN.png", p2, width=8, height=6, dpi=300)
+
+# Dotplot visualization (Combined genes)
+p3 <- dotplot(ora_combined, showCategory = 10) + 
+  ggtitle("ORA: Top GO-BP terms (Combined genes)")
+ggsave("figures/ORA_dotplot_Combined.png", p3, width=8, height=6, dpi=300)
+```
+
+- **Up-regulated ORA**:
+  - Smooth muscle & epithelial cell proliferation suggests potential tissue regeneration or inflammatory response
+  - Inflammatory response to wounding indicates activation of immune response and tissue repair
+  - Positive regulation of miRNA transcription highlights how miRNA regulation is responsible for gene expression changes
+  - miRNA regulatory pathways may be a hint of a bit complex post-transcriptional control mechanism
+  - Up-regulated genes highlight pathways involved in tissue repair, inflammation, and cell proliferation
+  
+- **Down-regulated ORA**:
+  - Showing response to hypoxia (GO:0001666) & to decreased oxygen levels suggest a suppression of genes involved in oxygen sensing pathways
+  - Regulation of intrinsic apoptotic signaling pathway shows potential suppression of apoptosis-related responses
+  - Suppression of apoptosis-related pathways may imply an adaptive response to maintain cell survival under experimental conditions
+  - Down-regulated genes are associated with decreased activity in oxygen response pathways => potentially reducing stress-related apoptotic processes
+  
+- **Combined ORA**:
+  - Showing response to oxygen levels (GO:0070482) indicates involvement in hypoxia-related mechanisms
+  - High enrichment in regulatory processes suggests that these genes may influence cellular adaptation mechanisms
+
+# **References**
+1. **limma**: Smyth, G. K. (2004). Linear models and empirical Bayes methods for assessing differential expression in microarray experiments. *Statistical Applications in Genetics and Molecular Biology, 3*(1).  
+   - DOI: https://doi.org/10.2202/1544-6115.1027
+2. **edgeR**: Robinson, M. D., McCarthy, D. J., & Smyth, G. K. (2010). edgeR: A Bioconductor package for differential expression analysis of digital gene expression data. *Bioinformatics, 26*(1), 139–140.  
+   - DOI: https://doi.org/10.1093/bioinformatics/btp616
+3. **clusterProfiler**: Yu, G., Wang, L.-G., Han, Y., & He, Q.-Y. (2012). clusterProfiler: An R package for comparing biological themes among gene clusters. *OMICS: A Journal of Integrative Biology, 16*(5), 284–287.  
+   - DOI: https://doi.org/10.1089/omi.2011.0118
+4. **org.Hs.eg.db**: Carlson, M. (2019). org.Hs.eg.db: Genome-wide annotation for Human. R package version X.X.X.  
+   - Available at: https://bioconductor.org/packages/release/data/annotation/html/org.Hs.eg.db.html
+5. GEO Dataset:  
+   - GSE263125: Accessible at https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE263125
+
+
+
+
+
 
